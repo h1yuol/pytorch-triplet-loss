@@ -4,6 +4,9 @@ import torch
 from model.triplet_loss import pairwise_distances as pairwise_distances_pytorch
 from model.triplet_loss import get_valid_triplets_mask
 from model.triplet_loss import batch_all_triplet_loss
+from model.triplet_loss import get_valid_positive_mask
+from model.triplet_loss import get_valid_negative_mask
+from model.triplet_loss import batch_hard_triplet_loss
 
 def pairwise_distance_np(feature, squared=False):
     """Computes the pairwise distance matrix in numpy.
@@ -39,6 +42,42 @@ def test_pairwise_distances():
     	res_np = pairwise_distance_np(embeddings, squared=squared)
     	res_pytorch = pairwise_distances_pytorch(torch.from_numpy(embeddings), squared=squared)
     	assert np.allclose(res_np, res_pytorch.numpy())
+
+def test_anchor_positive_triplet_mask():
+    """Test function _get_anchor_positive_triplet_mask."""
+    num_data = 64
+    num_classes = 10
+
+    labels = np.random.randint(0, num_classes, size=(num_data)).astype(np.float32)
+
+    mask_np = np.zeros((num_data, num_data))
+    for i in range(num_data):
+        for j in range(num_data):
+            distinct = (i != j)
+            valid = labels[i] == labels[j]
+            mask_np[i, j] = (distinct and valid)
+
+    mask_pytorch = get_valid_positive_mask(torch.from_numpy(labels))
+
+    assert np.allclose(mask_np, mask_pytorch.numpy())
+
+def test_anchor_negative_triplet_mask():
+    """Test function _get_anchor_negative_triplet_mask."""
+    num_data = 64
+    num_classes = 10
+
+    labels = np.random.randint(0, num_classes, size=(num_data)).astype(np.float32)
+
+    mask_np = np.zeros((num_data, num_data))
+    for i in range(num_data):
+        for k in range(num_data):
+            distinct = (i != k)
+            valid = (labels[i] != labels[k])
+            mask_np[i, k] = (distinct and valid)
+
+    mask_pytorch = get_valid_negative_mask(torch.from_numpy(labels))
+
+    assert np.allclose(mask_np, mask_pytorch.numpy())
 
 def test_triplet_mask():
     """Test function _get_triplet_mask."""
@@ -99,6 +138,35 @@ def test_batch_all_triplet_loss():
         assert np.allclose(loss_np, loss_pytorch.item())
         assert np.allclose(num_positives / num_valid, fraction.item())
 
+def test_batch_hard_triplet_loss():
+    """Test the triplet loss with batch hard triplet mining"""
+    num_data = 50
+    feat_dim = 6
+    margin = 0.2
+    num_classes = 5
+
+    embeddings = np.random.rand(num_data, feat_dim).astype(np.float32)
+    labels = np.random.randint(0, num_classes, size=(num_data)).astype(np.float32)
+
+    for squared in [True, False]:
+        pdist_matrix = pairwise_distance_np(embeddings, squared=squared)
+
+        loss_np = 0.0
+        for i in range(num_data):
+            # Select the hardest positive
+            max_pos_dist = np.max(pdist_matrix[i][labels == labels[i]])
+
+            # Select the hardest negative
+            min_neg_dist = np.min(pdist_matrix[i][labels != labels[i]])
+
+            loss = np.maximum(0.0, max_pos_dist - min_neg_dist + margin)
+            loss_np += loss
+
+        loss_np /= num_data
+
+        # Compute the loss in TF.
+        loss_pytorch = batch_hard_triplet_loss(torch.from_numpy(labels), torch.from_numpy(embeddings), margin, squared=squared)
+        assert np.allclose(loss_np, loss_pytorch.item())
 
 
 
